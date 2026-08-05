@@ -1,0 +1,6 @@
+# reMarkable system binaries are proprietary - never commit them
+*.so
+*.so.*
+libepaper*
+backups/
+__pycache__/

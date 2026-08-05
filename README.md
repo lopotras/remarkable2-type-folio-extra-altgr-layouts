@@ -1,0 +1,87 @@
+# Polish layout for the reMarkable Type Folio
+
+Type **ą ć ę ł ń ó ś ź ż** on a US-layout Type Folio using AltGr (right Alt),
+exactly like the standard *Polish programmers* layout — in stock xochitl, no
+Toltec or custom launcher required.
+
+| Keys | Result |
+|---|---|
+| `AltGr` + `a c e l n o s x z` | ą ć ę ł ń ó ś ź ż |
+| `AltGr` + `Shift` + letter | Ą Ć Ę Ł Ń Ó Ś Ź Ż |
+
+Caps Lock behaves correctly (Caps + AltGr gives uppercase).
+
+## Why a binary patch?
+
+reMarkable compiles all Type Folio keyboard layouts into the closed-source Qt
+platform plugin `/usr/lib/plugins/platforms/libepaper.so`. There is no Polish
+table, no config file, and no keymap-loading mechanism (the qmap support from
+upstream Qt was removed from their fork). The kernel side needs nothing — the
+keyboard already sends AltGr as a proper modifier.
+
+This tool locates the compiled-in **US keymap** inside the plugin via its
+dynamic symbol (`EpaperEvdevKeyboardMap::Locale::UnitedStates::keymap`),
+verifies the entry format against known entries, and overwrites 18 mappings
+for keys that don't physically exist on the Type Folio (numeric keypad,
+NumLock, ScrollLock) with the Polish AltGr entries. Because the symbol is
+looked up by name and the format is verified first, the same script keeps
+working across OS builds — and refuses to touch anything it doesn't recognize.
+
+In **Settings → Language and keyboard**, keep the Type Folio layout on
+**US/English** — Polish programmers *is* the US layout plus AltGr, and the
+patched US table is what that setting selects.
+
+## Requirements
+
+- reMarkable 2 with a Type Folio (US layout) and SSH access
+  ([developer mode / root access](https://support.remarkable.com/s/article/Developer-mode)).
+  Password-less SSH keys recommended.
+- python3 + ssh/scp on your computer.
+- Tested on OS 3.26 (rM2). The reMarkable Paper Pro is untested; the script's
+  safety checks will abort rather than corrupt anything unrecognized.
+
+## Usage
+
+Connect the tablet via USB (it appears as `10.11.99.1`), then:
+
+```bash
+./typefolio-pl.py check     # show OS version and patch status
+./typefolio-pl.py patch     # back up, patch, restart xochitl
+./typefolio-pl.py restore   # put the original plugin back
+```
+
+Use `--host root@<ip>` for SSH over Wi-Fi, `--dry-run` to test without
+touching the device.
+
+The original plugin is kept on the tablet as
+`/home/root/libepaper.so.orig-<sha8>`.
+
+## OS updates
+
+A system update replaces `libepaper.so`, silently removing the patch.
+Just run `./typefolio-pl.py patch` again after updating.
+
+## Safety notes
+
+- The patch only modifies keymap *data* (no code), only in entries for keys
+  the Type Folio doesn't have, and verifies the result before deploying.
+- Every run checks the entry format first and aborts on any mismatch, so a
+  future incompatible OS build fails safe.
+- Do **not** write to `/sys/pogo/status/lang` while experimenting — writes are
+  sent to the keyboard's microcontroller and permanently reprogram the
+  language stored in the folio itself.
+
+## How it was reverse-engineered
+
+Keymap entries are 16 bytes:
+`{u16 keycode, u16 unicode, u32 qtcode, u8 required_modifiers, u8 pad, u16 flags, u32 special}`
+— a widened variant of Qt's `QEvdevKeyboardMap::Mapping`. `required_modifiers`
+bit 0x02 is AltGr; `flags` 2 marks letters (Caps Lock applies); modifier keys
+carry their modifier bit in `special`. The US table already maps right Alt to
+`Qt::Key_AltGr`, so adding AltGr letter entries is purely additive.
+
+## Disclaimer
+
+Not affiliated with reMarkable. You are modifying system files on your own
+device at your own risk; the `restore` command and on-device backups make the
+change fully reversible.
