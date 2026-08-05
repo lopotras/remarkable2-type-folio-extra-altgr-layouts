@@ -17,17 +17,27 @@ function keys); colliding AltGr mappings are replaced in place.
 
 Usage:
     typefolio-pl.py layouts                       # list available layouts
+    typefolio-pl.py setup                         # install an SSH key (asks password once)
     typefolio-pl.py check                         # report device/patch status
     typefolio-pl.py patch [--layout pl] [--dry-run]
     typefolio-pl.py restore                       # restore the original plugin
-    Options: --host root@10.11.99.1  --no-restart
+    Options: --host root@10.11.99.1  --ask-pass  --no-restart
 
-Requires: python3 on this machine, ssh/scp access to the tablet.
+Authentication: with SSH keys installed (see `setup`) everything just works;
+otherwise pass --ask-pass to type the tablet's root password (shown on the
+device under Settings -> General -> Help -> Copyright and licenses). The
+TYPEFOLIO_PASSWORD environment variable is honored with --ask-pass.
+
+Requires: python3 and OpenSSH (ssh/scp) on this machine.
 Tested on reMarkable 2, OS 3.26. After every OS update, re-run `patch`.
 """
 
 import argparse
+import atexit
+import getpass
 import hashlib
+import os
+import stat
 import struct
 import subprocess
 import sys
@@ -280,18 +290,37 @@ def sha8(b):
     return hashlib.sha256(b).hexdigest()[:8]
 
 
+SSH_ENV = None  # set up by use_password(); None means key-based auth
+SSH_OPTS = ["-o", "BatchMode=yes", "-o", "StrictHostKeyChecking=accept-new"]
+
+
+def use_password():
+    """Route the root password to ssh/scp via SSH_ASKPASS (no sshpass needed)."""
+    global SSH_ENV, SSH_OPTS
+    pw = os.environ.get("TYPEFOLIO_PASSWORD") or getpass.getpass(
+        "reMarkable root password (Settings > General > Help > Copyright and licenses): ")
+    fd, askpass = tempfile.mkstemp(prefix="typefolio-askpass-")
+    os.write(fd, b'#!/bin/sh\nprintf "%s" "$TYPEFOLIO_PW"\n')
+    os.close(fd)
+    os.chmod(askpass, stat.S_IRWXU)
+    atexit.register(os.unlink, askpass)
+    SSH_ENV = {**os.environ, "TYPEFOLIO_PW": pw, "SSH_ASKPASS": askpass,
+               "SSH_ASKPASS_REQUIRE": "force", "DISPLAY": os.environ.get("DISPLAY", ":0")}
+    SSH_OPTS = ["-o", "NumberOfPasswordPrompts=1",
+                "-o", "StrictHostKeyChecking=accept-new"]
+
+
 def run(cmd, **kw):
-    return subprocess.run(cmd, check=True, **kw)
+    return subprocess.run(cmd, check=True, env=SSH_ENV, **kw)
 
 
 def ssh(host, script, capture=False):
-    return run(["ssh", "-o", "BatchMode=yes", host, script],
-               capture_output=capture, text=capture)
+    return run(["ssh", *SSH_OPTS, host, script], capture_output=capture, text=capture)
 
 
 def fetch_plugin(host, tmpdir):
     local = Path(tmpdir) / "libepaper.so"
-    run(["scp", "-q", f"{host}:{PLUGIN}", str(local)])
+    run(["scp", "-q", *SSH_OPTS, f"{host}:{PLUGIN}", str(local)])
     return local.read_bytes()
 
 
@@ -337,10 +366,35 @@ def cmd_patch(args):
         local = Path(tmp) / "libepaper-patched.so"
         local.write_bytes(patched)
         ssh(args.host, f"cp -n {PLUGIN} {backup}")
-        run(["scp", "-q", str(local), f"{args.host}:/tmp/libepaper-patched.so"])
+        run(["scp", "-q", *SSH_OPTS, str(local), f"{args.host}:/tmp/libepaper-patched.so"])
         ssh(args.host, f"mv /tmp/libepaper-patched.so {PLUGIN}")
         print(f"Deployed. Original kept at {backup}")
         restart(args)
+
+
+def cmd_setup(args):
+    """Install an SSH public key on the tablet so no password is needed later."""
+    ssh_dir = Path.home() / ".ssh"
+    pub = next((p for p in (ssh_dir / f"id_{t}.pub" for t in ("ed25519", "ecdsa", "rsa"))
+                if p.exists()), None)
+    if pub is None:
+        key = ssh_dir / "id_ed25519"
+        print(f"No SSH key found — generating {key}")
+        run(["ssh-keygen", "-q", "-t", "ed25519", "-N", "", "-f", str(key)])
+        pub = key.with_suffix(".pub")
+    pubkey = pub.read_text().strip()
+    print(f"Installing {pub} on {args.host} …")
+    ssh(args.host,
+        "mkdir -p ~/.ssh && chmod 700 ~/.ssh && "
+        f"grep -qF '{pubkey}' ~/.ssh/authorized_keys 2>/dev/null || "
+        f"printf '%s\\n' '{pubkey}' >> ~/.ssh/authorized_keys && "
+        "chmod 600 ~/.ssh/authorized_keys")
+    # Verify that key-based auth now works.
+    global SSH_ENV, SSH_OPTS
+    SSH_ENV = None
+    SSH_OPTS = ["-o", "BatchMode=yes", "-o", "StrictHostKeyChecking=accept-new"]
+    ssh(args.host, "true")
+    print("Key installed — future runs won't need the password.")
 
 
 def cmd_restore(args):
@@ -363,19 +417,26 @@ def restart(args):
 
 def main():
     p = argparse.ArgumentParser(description=__doc__.splitlines()[0])
-    p.add_argument("command", choices=["layouts", "check", "patch", "restore"])
+    p.add_argument("command", choices=["layouts", "setup", "check", "patch", "restore"])
     p.add_argument("--layout", default="pl", choices=sorted(LAYOUTS),
                    help="layout to apply with `patch` (default: %(default)s)")
     p.add_argument("--host", default="root@10.11.99.1",
                    help="SSH destination of the tablet (default: %(default)s)")
+    p.add_argument("--ask-pass", action="store_true",
+                   help="authenticate with the tablet's root password instead of SSH keys")
     p.add_argument("--dry-run", action="store_true", help="patch: don't modify the device")
     p.add_argument("--no-restart", action="store_true", help="don't restart xochitl")
     args = p.parse_args()
+    if args.ask_pass or args.command == "setup":
+        use_password()
     try:
-        {"layouts": cmd_layouts, "check": cmd_check,
+        {"layouts": cmd_layouts, "setup": cmd_setup, "check": cmd_check,
          "patch": cmd_patch, "restore": cmd_restore}[args.command](args)
     except subprocess.CalledProcessError as e:
-        raise SystemExit(f"error: command failed: {' '.join(e.cmd)}")
+        hint = ("" if args.ask_pass or args.command == "setup" else
+                "\nhint: if SSH keys aren't set up on the tablet, retry with "
+                "--ask-pass, or run `setup` once")
+        raise SystemExit(f"error: command failed: {' '.join(e.cmd)}{hint}")
 
 
 if __name__ == "__main__":

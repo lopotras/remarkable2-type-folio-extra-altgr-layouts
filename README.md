@@ -50,22 +50,29 @@ patched US table is what that setting selects.
 
 - reMarkable 2 with a Type Folio (US layout) and SSH access
   ([developer mode / root access](https://support.remarkable.com/s/article/Developer-mode)).
-  Password-less SSH keys recommended.
-- python3 + ssh/scp on your computer.
-- Tested on OS 3.26 (rM2). The reMarkable Paper Pro is untested; the script's
-  safety checks will abort rather than corrupt anything unrecognized.
+- python3 + OpenSSH (ssh/scp) on your computer.
+- Tested on OS 3.26 and 3.28 (rM2). The reMarkable Paper Pro is untested; the
+  script's safety checks will abort rather than corrupt anything unrecognized.
 
 ## Usage
 
 Connect the tablet via USB (it appears as `10.11.99.1`), then:
 
 ```bash
+./typefolio-pl.py setup                # one-time: install an SSH key (asks password)
 ./typefolio-pl.py layouts              # list available layouts
 ./typefolio-pl.py check                # show OS version and patch status
 ./typefolio-pl.py patch                # apply Polish (default)
 ./typefolio-pl.py patch --layout lv    # or any layout from the table
 ./typefolio-pl.py restore              # put the original plugin back
 ```
+
+No SSH keys? Either run `setup` once (it installs — and if needed generates —
+a key, so later runs need no password), or add `--ask-pass` to any command to
+type the tablet's root password each time. The password is shown on the
+device under **Settings → General → Help → Copyright and licenses**. Scripts
+can pass it via the `TYPEFOLIO_PASSWORD` environment variable with
+`--ask-pass`; no `sshpass` or other extras needed.
 
 Use `--host root@<ip>` for SSH over Wi-Fi, `--dry-run` to test without
 touching the device. To switch between layouts, `restore` first, then `patch`
