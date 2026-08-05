@@ -1,34 +1,49 @@
-# Polish layout for the reMarkable Type Folio
+# AltGr national layouts for the reMarkable Type Folio
 
-Type **ą ć ę ł ń ó ś ź ż** on a US-layout Type Folio using AltGr (right Alt),
-exactly like the standard *Polish programmers* layout — in stock xochitl, no
-Toltec or custom launcher required.
+Type national characters on a US-layout Type Folio using AltGr (right Alt) —
+in stock xochitl, no Toltec or custom launcher required. Born as a "Polish
+programmers" patch, it now supports every layout that is genuinely
+"US QWERTY + AltGr letters" in xkeyboard-config:
 
-| Keys | Result |
-|---|---|
-| `AltGr` + `a c e l n o s x z` | ą ć ę ł ń ó ś ź ż |
-| `AltGr` + `Shift` + letter | Ą Ć Ę Ł Ń Ó Ś Ź Ż |
+| Layout | Name | AltGr characters |
+|---|---|---|
+| `pl` (default) | Polish (programmers) | ą ć ę ł ń ó ś ź ż |
+| `ro` | Romanian (programmers) | ă â î ș ț đ ł ß |
+| `lv` | Latvian | ā č ē ģ ī ķ ļ ņ ō ŗ š ū ž |
+| `lt` | Lithuanian (US) | ą č ę ė į š ų ū ž (on the digit row) |
+| `hr` | Croatian (US) | č ć đ š ž (on their national positions) |
+| `szl` | Silesian | ã ć ń ŏ ô ō õ ś ź ż |
+| `csb` | Kashubian | ą ã é ë ł ń ò ó ô ù ż |
+| `en-intl` | English (US intl.), letters only | á ä å æ ç ð é ë í ï ñ ó ö ø œ ß þ ú ü |
 
-Caps Lock behaves correctly (Caps + AltGr gives uppercase).
+`AltGr+letter` gives the lowercase form, `AltGr+Shift+letter` the uppercase;
+Caps Lock behaves correctly. Each table mirrors the letter assignments of the
+corresponding [xkeyboard-config](https://gitlab.freedesktop.org/xkeyboard-config/xkeyboard-config)
+layout; dead keys and AltGr punctuation of the source layouts are
+intentionally omitted (`en-intl` is the direct-letter subset of
+"English (intl., with AltGr dead keys)"). Czech, Slovak, and Maltese were
+evaluated and can't be supported faithfully — their standard layouts either
+replace base US keys or rely on dead keys.
 
 ## Why a binary patch?
 
 reMarkable compiles all Type Folio keyboard layouts into the closed-source Qt
 platform plugin `/usr/lib/plugins/platforms/libepaper.so`. There is no Polish
-table, no config file, and no keymap-loading mechanism (the qmap support from
-upstream Qt was removed from their fork). The kernel side needs nothing — the
-keyboard already sends AltGr as a proper modifier.
+(or Romanian, or Latvian…) table, no config file, and no keymap-loading
+mechanism (the qmap support from upstream Qt was removed from their fork).
+The kernel side needs nothing — the keyboard already sends AltGr as a proper
+modifier.
 
 This tool locates the compiled-in **US keymap** inside the plugin via its
 dynamic symbol (`EpaperEvdevKeyboardMap::Locale::UnitedStates::keymap`),
-verifies the entry format against known entries, and overwrites 18 mappings
-for keys that don't physically exist on the Type Folio (numeric keypad,
-NumLock, ScrollLock) with the Polish AltGr entries. Because the symbol is
-looked up by name and the format is verified first, the same script keeps
-working across OS builds — and refuses to touch anything it doesn't recognize.
+verifies the entry format against known entries, and writes the new AltGr
+entries over mappings for keys that don't physically exist on the Type Folio
+(numeric keypad, NumLock, ScrollLock, F1–F12). Because the symbol is looked
+up by name and the format is verified first, the same script keeps working
+across OS builds — and refuses to touch anything it doesn't recognize.
 
 In **Settings → Language and keyboard**, keep the Type Folio layout on
-**US/English** — Polish programmers *is* the US layout plus AltGr, and the
+**US/English** — these layouts *are* the US layout plus AltGr, and the
 patched US table is what that setting selects.
 
 ## Requirements
@@ -45,13 +60,16 @@ patched US table is what that setting selects.
 Connect the tablet via USB (it appears as `10.11.99.1`), then:
 
 ```bash
-./typefolio-pl.py check     # show OS version and patch status
-./typefolio-pl.py patch     # back up, patch, restart xochitl
-./typefolio-pl.py restore   # put the original plugin back
+./typefolio-pl.py layouts              # list available layouts
+./typefolio-pl.py check                # show OS version and patch status
+./typefolio-pl.py patch                # apply Polish (default)
+./typefolio-pl.py patch --layout lv    # or any layout from the table
+./typefolio-pl.py restore              # put the original plugin back
 ```
 
 Use `--host root@<ip>` for SSH over Wi-Fi, `--dry-run` to test without
-touching the device.
+touching the device. To switch between layouts, `restore` first, then `patch`
+— the tool enforces this.
 
 The original plugin is kept on the tablet as
 `/home/root/libepaper.so.orig-<sha8>`.

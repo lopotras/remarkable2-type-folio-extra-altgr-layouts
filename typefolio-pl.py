@@ -1,24 +1,25 @@
 #!/usr/bin/env python3
-"""Polish Programmers layout (AltGr diacritics) for the reMarkable Type Folio.
+"""AltGr national layouts for the reMarkable Type Folio (US hardware).
 
 Stock xochitl compiles its keyboard layouts into the Qt platform plugin
-/usr/lib/plugins/platforms/libepaper.so and offers no Polish layout. This tool
-binary-patches the compiled-in US keymap so that AltGr (right Alt) produces
-Polish diacritics (a la the standard "Polish programmers" layout):
-
-    AltGr+a c e l n o s x z        ->  ą ć ę ł ń ó ś ź ż
-    AltGr+Shift+a c e l n o s x z  ->  Ą Ć Ę Ł Ń Ó Ś Ź Ż
+/usr/lib/plugins/platforms/libepaper.so and offers no way to add one. This
+tool binary-patches the compiled-in US keymap so that AltGr (right Alt)
+produces national characters, in the spirit of the "Polish programmers"
+layout. Several layouts are available (see `layouts` command); each mirrors
+the letter assignments of the corresponding xkeyboard-config layout.
 
 It is build-agnostic: the keymap array is located via the dynamic symbol
   EpaperEvdevKeyboardMap::Locale::UnitedStates::keymap
 and the 16-byte entry format is verified against known entries before any
-byte is modified. The 18 new entries overwrite mappings for keys that do not
-physically exist on the Type Folio (numeric keypad, NumLock, ScrollLock).
+byte is modified. New entries overwrite mappings for keys that do not
+physically exist on the Type Folio (numeric keypad, NumLock, ScrollLock,
+function keys); colliding AltGr mappings are replaced in place.
 
 Usage:
-    typefolio-pl.py check                 # report device/patch status
-    typefolio-pl.py patch [--dry-run]     # apply the patch (idempotent)
-    typefolio-pl.py restore               # restore the original plugin
+    typefolio-pl.py layouts                       # list available layouts
+    typefolio-pl.py check                         # report device/patch status
+    typefolio-pl.py patch [--layout pl] [--dry-run]
+    typefolio-pl.py restore                       # restore the original plugin
     Options: --host root@10.11.99.1  --no-restart
 
 Requires: python3 on this machine, ssh/scp access to the tablet.
@@ -45,31 +46,75 @@ MOD_SHIFT, MOD_ALTGR = 0x01, 0x02
 QT_KEY_ALTGR = 0x01001103
 KEY_RIGHTALT = 100
 
-# Linux keycodes of keys absent on the Type Folio, safe to sacrifice:
-# KPASTERISK, NUMLOCK, SCROLLLOCK, KP7..KPDOT, KPENTER, KPSLASH
-SACRIFICIAL = {55, 69, 70, 71, 72, 73, 74, 75, 76, 77, 78, 79, 80, 81, 82, 83, 96, 98}
+# Keys absent on the Type Folio whose keymap entries are safe to sacrifice:
+# numeric keypad, NumLock, ScrollLock, KPENTER, KPSLASH, and F1-F12.
+SACRIFICIAL = ({55, 69, 70, 71, 72, 73, 74, 75, 76, 77, 78, 79, 80, 81, 82, 83,
+                96, 98} | set(range(59, 69)) | {87, 88})
 
-# (keycode, lowercase, uppercase, base latin letter)
-POLISH = [
-    (30, 0x0105, 0x0104, "A"),  # ą Ą
-    (46, 0x0107, 0x0106, "C"),  # ć Ć
-    (18, 0x0119, 0x0118, "E"),  # ę Ę
-    (38, 0x0142, 0x0141, "L"),  # ł Ł
-    (49, 0x0144, 0x0143, "N"),  # ń Ń
-    (24, 0x00F3, 0x00D3, "O"),  # ó Ó
-    (31, 0x015B, 0x015A, "S"),  # ś Ś
-    (45, 0x017A, 0x0179, "X"),  # ź Ź
-    (44, 0x017C, 0x017B, "Z"),  # ż Ż
-]
+# US key -> Linux keycode, and the Qt keycode of that key's base US character.
+KEYS = {}
+for i, ch in enumerate("1234567890-="):
+    KEYS[ch] = (2 + i, ord("1234567890-="[i].upper() if ch.isalpha() else ch))
+for i, ch in enumerate("qwertyuiop[]"):
+    KEYS[ch] = (16 + i, ord(ch.upper()))
+for i, ch in enumerate("asdfghjkl;'"):
+    KEYS[ch] = (30 + i, ord(ch.upper()))
+for i, ch in enumerate("zxcvbnm,./"):
+    KEYS[ch] = (44 + i, ord(ch.upper()))
+KEYS["\\"] = (43, ord("\\"))
+KEYS["`"] = (41, ord("`"))
+
+# Layout tables: key -> (AltGr char, AltGr+Shift char or None).
+# Sources: xkeyboard-config symbols files (letter assignments only; the
+# source layouts' punctuation extras and dead keys are intentionally omitted).
+LAYOUTS = {
+    "pl": ("Polish (programmers)", {
+        "a": "ąĄ", "c": "ćĆ", "e": "ęĘ", "l": "łŁ", "n": "ńŃ",
+        "o": "óÓ", "s": "śŚ", "x": "źŹ", "z": "żŻ",
+    }),
+    "ro": ("Romanian (programmers)", {
+        "q": "âÂ", "w": "ßẞ", "t": "țȚ", "i": "îÎ",
+        "a": "ăĂ", "s": "șȘ", "d": "đĐ", "l": "łŁ",
+    }),
+    "lv": ("Latvian", {
+        "e": "ēĒ", "r": "ŗŖ", "u": "ūŪ", "i": "īĪ", "o": "ōŌ",
+        "a": "āĀ", "s": "šŠ", "g": "ģĢ", "k": "ķĶ", "l": "ļĻ",
+        "z": "žŽ", "c": "čČ", "n": "ņŅ",
+    }),
+    "lt": ("Lithuanian (US)", {
+        "1": "ąĄ", "2": "čČ", "3": "ęĘ", "4": "ėĖ", "5": "įĮ",
+        "6": "šŠ", "7": "ųŲ", "8": "ūŪ", "=": "žŽ",
+    }),
+    "hr": ("Croatian (US)", {
+        "y": "zZ", "z": "yY", "[": "šŠ", "]": "đĐ", "k": "ł",
+        "l": "Ł", ";": "čČ", "'": "ćĆ", "\\": "žŽ",
+    }),
+    "szl": ("Silesian", {
+        "e": "ãÃ", "o": "ôÔ", "u": "ōŌ", "p": "õÕ", "a": "ŏŎ",
+        "s": "śŚ", "z": "żŻ", "x": "źŹ", "c": "ćĆ", "n": "ńŃ",
+    }),
+    "csb": ("Kashubian", {
+        "e": "éÉ", "r": "ëË", "u": "ùÙ", "i": "òÒ", "o": "óÓ",
+        "p": "ôÔ", "a": "ąĄ", "s": "ãÃ", "l": "łŁ", "z": "żŻ",
+        "n": "ńŃ",
+    }),
+    "en-intl": ("English (US intl., AltGr letters only)", {
+        "q": "äÄ", "w": "åÅ", "e": "éÉ", "r": "ëË", "t": "þÞ",
+        "y": "üÜ", "u": "úÚ", "i": "íÍ", "o": "óÓ", "p": "öÖ",
+        "a": "áÁ", "s": "ß", "d": "ðÐ", "j": "ïÏ", "k": "œŒ",
+        "l": "øØ", "z": "æÆ", "x": "œŒ", "n": "ñÑ", ",": "çÇ",
+    }),
+}
 
 
-def polish_entries():
-    out = []
-    for kc, lo, up, base in POLISH:
-        qt = ord(base)
-        out.append(ENTRY.pack(kc, lo, qt, MOD_ALTGR, 0, FLAG_LETTER, 0))
-        out.append(ENTRY.pack(kc, up, qt, MOD_ALTGR | MOD_SHIFT, 0, FLAG_LETTER, 0))
-    return out
+def layout_entries(name):
+    """Yield (keycode, required_mods, unicode, qtcode) for a layout."""
+    _, table = LAYOUTS[name]
+    for key, chars in table.items():
+        kc, qt = KEYS[key]
+        yield kc, MOD_ALTGR, ord(chars[0]), qt
+        if len(chars) > 1:
+            yield kc, MOD_ALTGR | MOD_SHIFT, ord(chars[1]), qt
 
 
 class Elf:
@@ -157,32 +202,50 @@ def iter_entries(data, off, size):
 
 def analyze(data):
     off, size = locate_keymap(data)
-    wanted = {(kc, m): uni for kc, lo, up, _ in POLISH
-              for m, uni in ((MOD_ALTGR, lo), (MOD_ALTGR | MOD_SHIFT, up))}
-    present = 0
     altgr_ok = False
     slots = []
+    existing = {}  # (keycode, mods) -> entry position
     for pos, (kc, uni, qt, mods, _, flags, special) in iter_entries(data, off, size):
-        if wanted.get((kc, mods)) == uni:
-            present += 1
         if kc == KEY_RIGHTALT and flags == FLAG_MODIFIER and special == MOD_ALTGR:
             altgr_ok = True
         if kc in SACRIFICIAL and flags == 0:
             slots.append(pos)
+        elif mods & MOD_ALTGR:
+            existing[(kc, mods)] = (pos, uni)
+    matches = {}
+    for name in LAYOUTS:
+        want = list(layout_entries(name))
+        got = sum(1 for kc, m, uni, _ in want
+                  if existing.get((kc, m), (None, None))[1] == uni)
+        matches[name] = (got, len(want))
     return {
         "offset": off, "size": size, "entries": size // ENTRY_SIZE,
-        "polish_present": present, "polish_total": len(wanted),
-        "altgr_wired": altgr_ok, "slots": slots,
+        "altgr_wired": altgr_ok, "slots": slots, "existing": existing,
+        "matches": matches,
     }
 
 
-def apply_patch(data):
+def detect_layout(info):
+    """Return (name, got, want) of the best-matching layout, or None."""
+    best = max(info["matches"].items(), key=lambda kv: kv[1][0] / kv[1][1])
+    name, (got, want) = best
+    return (name, got, want) if got else None
+
+
+def apply_patch(data, layout):
     """Return (patched_bytes, message). Raises SystemExit on any safety failure."""
     data = bytearray(data)
     info = analyze(data)
-    new = polish_entries()
-    if info["polish_present"] == len(new):
+    want = list(layout_entries(layout))
+    got, total = info["matches"][layout]
+    if got == total:
         return bytes(data), "already patched"
+    detected = detect_layout(info)
+    if detected and detected[0] != layout:
+        raise SystemExit(
+            f"error: device already carries '{detected[0]}' entries "
+            f"({detected[1]}/{detected[2]}) — run `restore` first, then patch"
+        )
     if not info["altgr_wired"]:
         # Right Alt not wired as AltGr in this build: rewrite its entry.
         fixed = False
@@ -194,16 +257,23 @@ def apply_patch(data):
                 break
         if not fixed:
             raise SystemExit("error: no KEY_RIGHTALT entry found to wire as AltGr")
-    if len(info["slots"]) < len(new):
+    # Colliding AltGr mappings are replaced in place; the rest go into slots.
+    slots = list(info["slots"])
+    needed = sum(1 for kc, m, _, _ in want if (kc, m) not in info["existing"])
+    if len(slots) < needed:
         raise SystemExit(
-            f"error: only {len(info['slots'])} sacrificial slots for {len(new)} entries"
+            f"error: only {len(slots)} sacrificial slots for {needed} new entries"
         )
-    for entry, pos in zip(new, info["slots"]):
-        data[pos : pos + ENTRY_SIZE] = entry
-    # Verify.
-    if analyze(data)["polish_present"] != len(new):
+    for kc, mods, uni, qt in want:
+        if (kc, mods) in info["existing"]:
+            pos = info["existing"][(kc, mods)][0]
+        else:
+            pos = slots.pop(0)
+        data[pos : pos + ENTRY_SIZE] = ENTRY.pack(kc, uni, qt, mods, 0, FLAG_LETTER, 0)
+    got, total = analyze(data)["matches"][layout]
+    if got != total:
         raise SystemExit("error: post-patch verification failed")
-    return bytes(data), f"patched {len(new)} entries"
+    return bytes(data), f"patched {total} entries ({LAYOUTS[layout][0]})"
 
 
 def sha8(b):
@@ -225,6 +295,12 @@ def fetch_plugin(host, tmpdir):
     return local.read_bytes()
 
 
+def cmd_layouts(_args):
+    for name, (label, table) in LAYOUTS.items():
+        chars = " ".join(chars[0] for chars in table.values())
+        print(f"{name:8s} {label:40s} {chars}")
+
+
 def cmd_check(args):
     with tempfile.TemporaryDirectory() as tmp:
         data = fetch_plugin(args.host, tmp)
@@ -232,33 +308,37 @@ def cmd_check(args):
     ver = ssh(args.host,
               "sed -n 's/^REMARKABLE_RELEASE_VERSION=//p' /usr/share/remarkable/update.conf",
               capture=True).stdout.strip()
-    state = ("fully patched" if info["polish_present"] == info["polish_total"]
-             else "NOT patched" if info["polish_present"] == 0
-             else f"PARTIALLY patched ({info['polish_present']}/{info['polish_total']})")
+    detected = detect_layout(info)
+    if detected is None:
+        state = "not patched"
+    else:
+        name, got, total = detected
+        full = "fully" if got == total else f"PARTIALLY ({got}/{total})"
+        state = f"{full} patched: {name} — {LAYOUTS[name][0]}"
     print(f"OS version:      {ver or 'unknown'}")
     print(f"plugin sha256:   {sha8(data)}…")
     print(f"US keymap:       {info['entries']} entries at offset {info['offset']:#x}")
     print(f"AltGr modifier:  {'wired' if info['altgr_wired'] else 'NOT wired'}")
-    print(f"Polish entries:  {state}")
+    print(f"Layout:          {state}")
 
 
 def cmd_patch(args):
     with tempfile.TemporaryDirectory() as tmp:
         orig = fetch_plugin(args.host, tmp)
-        patched, msg = apply_patch(orig)
+        patched, msg = apply_patch(orig, args.layout)
         if msg == "already patched":
-            print("Device is already patched — nothing to do.")
+            print(f"Device already has the '{args.layout}' layout — nothing to do.")
             return
         print(f"{msg} (sha {sha8(orig)}… -> {sha8(patched)}…)")
         if args.dry_run:
             print("Dry run — device not modified.")
             return
         backup = f"{BACKUP_DIR}/libepaper.so.orig-{sha8(orig)}"
-        local = Path(tmp) / "libepaper-pl.so"
+        local = Path(tmp) / "libepaper-patched.so"
         local.write_bytes(patched)
         ssh(args.host, f"cp -n {PLUGIN} {backup}")
-        run(["scp", "-q", str(local), f"{args.host}:/tmp/libepaper-pl.so"])
-        ssh(args.host, f"mv /tmp/libepaper-pl.so {PLUGIN}")
+        run(["scp", "-q", str(local), f"{args.host}:/tmp/libepaper-patched.so"])
+        ssh(args.host, f"mv /tmp/libepaper-patched.so {PLUGIN}")
         print(f"Deployed. Original kept at {backup}")
         restart(args)
 
@@ -283,14 +363,17 @@ def restart(args):
 
 def main():
     p = argparse.ArgumentParser(description=__doc__.splitlines()[0])
-    p.add_argument("command", choices=["check", "patch", "restore"])
+    p.add_argument("command", choices=["layouts", "check", "patch", "restore"])
+    p.add_argument("--layout", default="pl", choices=sorted(LAYOUTS),
+                   help="layout to apply with `patch` (default: %(default)s)")
     p.add_argument("--host", default="root@10.11.99.1",
                    help="SSH destination of the tablet (default: %(default)s)")
     p.add_argument("--dry-run", action="store_true", help="patch: don't modify the device")
     p.add_argument("--no-restart", action="store_true", help="don't restart xochitl")
     args = p.parse_args()
     try:
-        {"check": cmd_check, "patch": cmd_patch, "restore": cmd_restore}[args.command](args)
+        {"layouts": cmd_layouts, "check": cmd_check,
+         "patch": cmd_patch, "restore": cmd_restore}[args.command](args)
     except subprocess.CalledProcessError as e:
         raise SystemExit(f"error: command failed: {' '.join(e.cmd)}")
 
