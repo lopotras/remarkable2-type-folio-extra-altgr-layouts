@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""reMarkable 2 Type Folio AltGr Extra Layouts (US hardware keyboard).
+"""reMarkable 2 Type Folio Extra AltGr Layouts (US hardware keyboard).
 
 Stock xochitl compiles its keyboard layouts into the Qt platform plugin
 /usr/lib/plugins/platforms/libepaper.so and offers no way to add one. This
@@ -571,7 +571,7 @@ def choose_layout(current):
 
 
 def cmd_interactive(args):
-    print("\n\033[1mreMarkable 2 Type Folio — AltGr Extra Layouts installer\033[0m")
+    print("\n\033[1mreMarkable 2 Type Folio — Extra AltGr Layouts installer\033[0m")
     print("This adds national characters on AltGr (right Alt) to the Type Folio.")
     print("Nothing is changed until you confirm, and it can always be undone.")
 

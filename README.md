@@ -1,4 +1,4 @@
-# reMarkable 2 Type Folio AltGr Extra Layouts
+# reMarkable 2 Type Folio Extra AltGr Layouts
 
 Type national characters on a US-layout Type Folio using AltGr (right Alt) —
 in stock xochitl, no Toltec or custom launcher required. Born as a "Polish
