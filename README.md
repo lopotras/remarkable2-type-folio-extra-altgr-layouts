@@ -1,4 +1,4 @@
-# AltGr national layouts for the reMarkable Type Folio
+# reMarkable 2 Type Folio AltGr Extra Layouts
 
 Type national characters on a US-layout Type Folio using AltGr (right Alt) —
 in stock xochitl, no Toltec or custom launcher required. Born as a "Polish
@@ -59,7 +59,7 @@ patched US table is what that setting selects.
 Connect the tablet via USB (it appears as `10.11.99.1`) and run the wizard:
 
 ```bash
-./typefolio-pl.py interactive
+./typefolio-altgr.py interactive
 ```
 
 It walks you through everything — finding the tablet, logging in (asking for
@@ -72,12 +72,12 @@ that a reMarkable OS update causes. Nothing is modified until you confirm.
 Individual commands, if you prefer them:
 
 ```bash
-./typefolio-pl.py setup                # one-time: install an SSH key (asks password)
-./typefolio-pl.py layouts              # list available layouts
-./typefolio-pl.py check                # show OS version and patch status
-./typefolio-pl.py patch                # apply Polish (default)
-./typefolio-pl.py patch --layout lv    # or any layout from the table
-./typefolio-pl.py restore              # put the original plugin back
+./typefolio-altgr.py setup                # one-time: install an SSH key (asks password)
+./typefolio-altgr.py layouts              # list available layouts
+./typefolio-altgr.py check                # show OS version and patch status
+./typefolio-altgr.py patch                # apply Polish (default)
+./typefolio-altgr.py patch --layout lv    # or any layout from the table
+./typefolio-altgr.py restore              # put the original plugin back
 ```
 
 No SSH keys? Either run `setup` once (it installs — and if needed generates —
@@ -97,7 +97,7 @@ The original plugin is kept on the tablet as
 ## OS updates
 
 A system update replaces `libepaper.so`, silently removing the patch.
-Just run `./typefolio-pl.py interactive` (or `patch`) again after updating.
+Just run `./typefolio-altgr.py interactive` (or `patch`) again after updating.
 
 The update also switches the tablet to its other system partition, so SSH
 will warn that the host key changed — that's expected, and the wizard offers

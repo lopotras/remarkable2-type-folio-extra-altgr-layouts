@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""AltGr national layouts for the reMarkable Type Folio (US hardware).
+"""reMarkable 2 Type Folio AltGr Extra Layouts (US hardware keyboard).
 
 Stock xochitl compiles its keyboard layouts into the Qt platform plugin
 /usr/lib/plugins/platforms/libepaper.so and offers no way to add one. This
@@ -16,15 +16,15 @@ physically exist on the Type Folio (numeric keypad, NumLock, ScrollLock,
 function keys); colliding AltGr mappings are replaced in place.
 
 Usage:
-    typefolio-pl.py interactive                   # guided step-by-step wizard
-    typefolio-pl.py layouts                       # list available layouts
-    typefolio-pl.py setup                         # install an SSH key (asks password once)
-    typefolio-pl.py check                         # report device/patch status
-    typefolio-pl.py patch [--layout pl] [--dry-run]
-    typefolio-pl.py restore                       # restore the original plugin
+    typefolio-altgr.py interactive                   # guided step-by-step wizard
+    typefolio-altgr.py layouts                       # list available layouts
+    typefolio-altgr.py setup                         # install an SSH key (asks password once)
+    typefolio-altgr.py check                         # report device/patch status
+    typefolio-altgr.py patch [--layout pl] [--dry-run]
+    typefolio-altgr.py restore                       # restore the original plugin
     Options: --host root@10.11.99.1  --ask-pass  --no-restart
 
-New here? Run `typefolio-pl.py interactive` — it walks you through
+New here? Run `typefolio-altgr.py interactive` — it walks you through
 connecting, authenticating, and choosing a layout, whatever state the
 tablet is in.
 
@@ -34,7 +34,7 @@ device under Settings -> General -> Help -> Copyright and licenses). The
 TYPEFOLIO_PASSWORD environment variable is honored with --ask-pass.
 
 Requires: python3 and OpenSSH (ssh/scp) on this machine.
-Tested on reMarkable 2, OS 3.26. After every OS update, re-run `patch`.
+Tested on reMarkable 2, OS 3.26 and 3.28. After every OS update, re-run `patch`.
 """
 
 import argparse
@@ -571,7 +571,7 @@ def choose_layout(current):
 
 
 def cmd_interactive(args):
-    print("\n\033[1mreMarkable Type Folio — AltGr layout installer\033[0m")
+    print("\n\033[1mreMarkable 2 Type Folio — AltGr Extra Layouts installer\033[0m")
     print("This adds national characters on AltGr (right Alt) to the Type Folio.")
     print("Nothing is changed until you confirm, and it can always be undone.")
 
