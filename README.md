@@ -56,7 +56,20 @@ patched US table is what that setting selects.
 
 ## Usage
 
-Connect the tablet via USB (it appears as `10.11.99.1`), then:
+Connect the tablet via USB (it appears as `10.11.99.1`) and run the wizard:
+
+```bash
+./typefolio-pl.py interactive
+```
+
+It walks you through everything — finding the tablet, logging in (asking for
+the root password only if SSH keys aren't set up, and offering to install a
+key so it never asks again), showing what's currently installed, and letting
+you pick a layout from a menu with character previews. It also handles the
+common surprises: an unplugged cable, and the "host key has changed" warning
+that a reMarkable OS update causes. Nothing is modified until you confirm.
+
+Individual commands, if you prefer them:
 
 ```bash
 ./typefolio-pl.py setup                # one-time: install an SSH key (asks password)
@@ -76,7 +89,7 @@ can pass it via the `TYPEFOLIO_PASSWORD` environment variable with
 
 Use `--host root@<ip>` for SSH over Wi-Fi, `--dry-run` to test without
 touching the device. To switch between layouts, `restore` first, then `patch`
-— the tool enforces this.
+— the tool enforces this (the wizard does it for you).
 
 The original plugin is kept on the tablet as
 `/home/root/libepaper.so.orig-<sha8>`.
@@ -84,7 +97,11 @@ The original plugin is kept on the tablet as
 ## OS updates
 
 A system update replaces `libepaper.so`, silently removing the patch.
-Just run `./typefolio-pl.py patch` again after updating.
+Just run `./typefolio-pl.py interactive` (or `patch`) again after updating.
+
+The update also switches the tablet to its other system partition, so SSH
+will warn that the host key changed — that's expected, and the wizard offers
+to fix it for you.
 
 ## Safety notes
 

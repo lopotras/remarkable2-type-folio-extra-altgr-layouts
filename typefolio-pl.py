@@ -16,12 +16,17 @@ physically exist on the Type Folio (numeric keypad, NumLock, ScrollLock,
 function keys); colliding AltGr mappings are replaced in place.
 
 Usage:
+    typefolio-pl.py interactive                   # guided step-by-step wizard
     typefolio-pl.py layouts                       # list available layouts
     typefolio-pl.py setup                         # install an SSH key (asks password once)
     typefolio-pl.py check                         # report device/patch status
     typefolio-pl.py patch [--layout pl] [--dry-run]
     typefolio-pl.py restore                       # restore the original plugin
     Options: --host root@10.11.99.1  --ask-pass  --no-restart
+
+New here? Run `typefolio-pl.py interactive` — it walks you through
+connecting, authenticating, and choosing a layout, whatever state the
+tablet is in.
 
 Authentication: with SSH keys installed (see `setup`) everything just works;
 otherwise pass --ask-pass to type the tablet's root password (shown on the
@@ -291,14 +296,28 @@ def sha8(b):
 
 
 SSH_ENV = None  # set up by use_password(); None means key-based auth
-SSH_OPTS = ["-o", "BatchMode=yes", "-o", "StrictHostKeyChecking=accept-new"]
+KEY_OPTS = ["-o", "BatchMode=yes", "-o", "StrictHostKeyChecking=accept-new",
+            "-o", "ConnectTimeout=8"]
+PW_OPTS = ["-o", "NumberOfPasswordPrompts=1",
+           "-o", "StrictHostKeyChecking=accept-new", "-o", "ConnectTimeout=8"]
+SSH_OPTS = KEY_OPTS
+PASSWORD_HINT = ("The root password is shown on the tablet under "
+                 "Settings > General > Help >\nCopyright and licenses "
+                 "(scroll to the bottom).")
 
 
-def use_password():
+def use_keys():
+    """Switch back to key-based authentication."""
+    global SSH_ENV, SSH_OPTS
+    SSH_ENV, SSH_OPTS = None, KEY_OPTS
+
+
+def use_password(pw=None):
     """Route the root password to ssh/scp via SSH_ASKPASS (no sshpass needed)."""
     global SSH_ENV, SSH_OPTS
-    pw = os.environ.get("TYPEFOLIO_PASSWORD") or getpass.getpass(
-        "reMarkable root password (Settings > General > Help > Copyright and licenses): ")
+    if pw is None:
+        pw = os.environ.get("TYPEFOLIO_PASSWORD") or getpass.getpass(
+            "reMarkable root password: ")
     fd, askpass = tempfile.mkstemp(prefix="typefolio-askpass-")
     os.write(fd, b'#!/bin/sh\nprintf "%s" "$TYPEFOLIO_PW"\n')
     os.close(fd)
@@ -306,8 +325,28 @@ def use_password():
     atexit.register(os.unlink, askpass)
     SSH_ENV = {**os.environ, "TYPEFOLIO_PW": pw, "SSH_ASKPASS": askpass,
                "SSH_ASKPASS_REQUIRE": "force", "DISPLAY": os.environ.get("DISPLAY", ":0")}
-    SSH_OPTS = ["-o", "NumberOfPasswordPrompts=1",
-                "-o", "StrictHostKeyChecking=accept-new"]
+    SSH_OPTS = PW_OPTS
+
+
+def probe(host):
+    """Try to reach the tablet. Returns 'ok', or a failure kind + stderr."""
+    r = subprocess.run(["ssh", *SSH_OPTS, host, "true"],
+                       capture_output=True, text=True, env=SSH_ENV)
+    if r.returncode == 0:
+        return "ok", ""
+    err = r.stderr
+    low = err.lower()
+    if "host key verification failed" in low or "remote host identification has changed" in low:
+        kind = "hostkey"
+    elif "permission denied" in low or "authentication failed" in low:
+        kind = "auth"
+    elif ("no route to host" in low or "connection refused" in low
+          or "timed out" in low or "network is unreachable" in low
+          or "could not resolve" in low or "name or service not known" in low):
+        kind = "unreachable"
+    else:
+        kind = "other"
+    return kind, err.strip()
 
 
 def run(cmd, **kw):
@@ -351,73 +390,274 @@ def cmd_check(args):
     print(f"Layout:          {state}")
 
 
-def cmd_patch(args):
+def deploy(host, patched, orig, no_restart=False):
+    """Back up the current plugin, install `patched`, restart xochitl."""
+    backup = f"{BACKUP_DIR}/libepaper.so.orig-{sha8(orig)}"
     with tempfile.TemporaryDirectory() as tmp:
-        orig = fetch_plugin(args.host, tmp)
-        patched, msg = apply_patch(orig, args.layout)
-        if msg == "already patched":
-            print(f"Device already has the '{args.layout}' layout — nothing to do.")
-            return
-        print(f"{msg} (sha {sha8(orig)}… -> {sha8(patched)}…)")
-        if args.dry_run:
-            print("Dry run — device not modified.")
-            return
-        backup = f"{BACKUP_DIR}/libepaper.so.orig-{sha8(orig)}"
         local = Path(tmp) / "libepaper-patched.so"
         local.write_bytes(patched)
-        ssh(args.host, f"cp -n {PLUGIN} {backup}")
-        run(["scp", "-q", *SSH_OPTS, str(local), f"{args.host}:/tmp/libepaper-patched.so"])
-        ssh(args.host, f"mv /tmp/libepaper-patched.so {PLUGIN}")
-        print(f"Deployed. Original kept at {backup}")
-        restart(args)
+        ssh(host, f"cp -n {PLUGIN} {backup}")
+        run(["scp", "-q", *SSH_OPTS, str(local), f"{host}:/tmp/libepaper-patched.so"])
+        ssh(host, f"mv /tmp/libepaper-patched.so {PLUGIN}")
+    print(f"Deployed. Original kept at {backup}")
+    restart(host, no_restart)
 
 
-def cmd_setup(args):
-    """Install an SSH public key on the tablet so no password is needed later."""
+def do_restore(host, no_restart=False, quiet=False):
+    out = ssh(host, f"ls -t {BACKUP_DIR}/libepaper.so.orig-* 2>/dev/null | head -n 1",
+              capture=True).stdout.strip()
+    if not out:
+        raise SystemExit(f"error: no backup found in {BACKUP_DIR} on the device")
+    ssh(host, f"cp {out} {PLUGIN}")
+    print(f"Restored {out} -> {PLUGIN}")
+    restart(host, no_restart, quiet)
+
+
+def install_key(host):
+    """Install an SSH public key on the tablet; returns the key path used."""
     ssh_dir = Path.home() / ".ssh"
     pub = next((p for p in (ssh_dir / f"id_{t}.pub" for t in ("ed25519", "ecdsa", "rsa"))
                 if p.exists()), None)
     if pub is None:
+        ssh_dir.mkdir(mode=0o700, exist_ok=True)
         key = ssh_dir / "id_ed25519"
         print(f"No SSH key found — generating {key}")
         run(["ssh-keygen", "-q", "-t", "ed25519", "-N", "", "-f", str(key)])
         pub = key.with_suffix(".pub")
     pubkey = pub.read_text().strip()
-    print(f"Installing {pub} on {args.host} …")
-    ssh(args.host,
+    print(f"Installing {pub} on {host} …")
+    ssh(host,
         "mkdir -p ~/.ssh && chmod 700 ~/.ssh && "
         f"grep -qF '{pubkey}' ~/.ssh/authorized_keys 2>/dev/null || "
         f"printf '%s\\n' '{pubkey}' >> ~/.ssh/authorized_keys && "
         "chmod 600 ~/.ssh/authorized_keys")
-    # Verify that key-based auth now works.
-    global SSH_ENV, SSH_OPTS
-    SSH_ENV = None
-    SSH_OPTS = ["-o", "BatchMode=yes", "-o", "StrictHostKeyChecking=accept-new"]
+    return pub
+
+
+def cmd_patch(args):
+    with tempfile.TemporaryDirectory() as tmp:
+        orig = fetch_plugin(args.host, tmp)
+    patched, msg = apply_patch(orig, args.layout)
+    if msg == "already patched":
+        print(f"Device already has the '{args.layout}' layout — nothing to do.")
+        return
+    print(f"{msg} (sha {sha8(orig)}… -> {sha8(patched)}…)")
+    if args.dry_run:
+        print("Dry run — device not modified.")
+        return
+    deploy(args.host, patched, orig, args.no_restart)
+
+
+def cmd_setup(args):
+    """Install an SSH public key on the tablet so no password is needed later."""
+    install_key(args.host)
+    use_keys()  # verify that key-based auth now works
     ssh(args.host, "true")
     print("Key installed — future runs won't need the password.")
 
 
 def cmd_restore(args):
-    out = ssh(args.host, f"ls -t {BACKUP_DIR}/libepaper.so.orig-* 2>/dev/null | head -n 1",
-              capture=True).stdout.strip()
-    if not out:
-        raise SystemExit(f"error: no backup found in {BACKUP_DIR} on the device")
-    ssh(args.host, f"cp {out} {PLUGIN}")
-    print(f"Restored {out} -> {PLUGIN}")
-    restart(args)
+    do_restore(args.host, args.no_restart)
 
 
-def restart(args):
-    if args.no_restart:
-        print("Skipped xochitl restart (--no-restart). Restart it to take effect.")
+def restart(host, no_restart=False, quiet=False):
+    if no_restart:
+        if not quiet:
+            print("Skipped xochitl restart (--no-restart). Restart it to take effect.")
         return
-    ssh(args.host, "systemctl restart xochitl && sleep 2 && systemctl is-active --quiet xochitl")
+    ssh(host, "systemctl restart xochitl && sleep 2 && systemctl is-active --quiet xochitl")
     print("xochitl restarted and running.")
+
+
+def ask(prompt, default=None):
+    """Prompt for a line of input; Enter accepts `default`."""
+    suffix = f" [{default}]" if default else ""
+    try:
+        answer = input(f"{prompt}{suffix}: ").strip()
+    except EOFError:
+        raise SystemExit("\nAborted.")
+    return answer or (default or "")
+
+
+def confirm(prompt, default=True):
+    d = "Y/n" if default else "y/N"
+    while True:
+        answer = ask(f"{prompt} ({d})").lower()
+        if not answer:
+            return default
+        if answer in ("y", "yes"):
+            return True
+        if answer in ("n", "no"):
+            return False
+
+
+def step(n, title):
+    print(f"\n\033[1mStep {n}: {title}\033[0m")
+
+
+def wizard_connect(host):
+    """Reach the tablet, resolving connection and auth problems interactively."""
+    while True:
+        kind, err = probe(host)
+        if kind == "ok":
+            print(f"Connected to {host}.")
+            return host
+        if kind == "unreachable":
+            print(f"\nCan't reach {host}.")
+            print("  - Is the tablet connected by USB and powered on?")
+            print("  - Over Wi-Fi, use the IP from Settings > General > Help > "
+                  "Copyright and licenses.")
+            choice = ask("Press Enter to retry, or type a different host", "retry")
+            if choice != "retry":
+                host = choice if "@" in choice else f"root@{choice}"
+            continue
+        if kind == "hostkey":
+            print("\nThe tablet's SSH host key has changed.")
+            print("After a reMarkable OS update this is normal — the system boots from")
+            print("the other partition, which has its own key. It can also mean someone")
+            print("is intercepting the connection, so only continue on a trusted network.")
+            if not confirm("Forget the old key and reconnect?", default=True):
+                raise SystemExit("Aborted.")
+            hostname = host.split("@")[-1]
+            subprocess.run(["ssh-keygen", "-R", hostname],
+                           capture_output=True, text=True)
+            continue
+        if kind == "auth":
+            print("\nSSH keys aren't set up for this tablet (or were removed).")
+            print(PASSWORD_HINT)
+            use_password(getpass.getpass("reMarkable root password: "))
+            kind2, err2 = probe(host)
+            if kind2 == "ok":
+                print("Password accepted.")
+                if confirm("Install an SSH key so you won't need the password again?",
+                           default=True):
+                    install_key(host)
+                    use_keys()
+                    if probe(host)[0] != "ok":  # fall back to the password
+                        use_password(SSH_ENV and SSH_ENV.get("TYPEFOLIO_PW"))
+                        print("Key install didn't take effect; continuing with the password.")
+                    else:
+                        print("Key installed — future runs won't need the password.")
+                return host
+            use_keys()
+            print(f"\nThat didn't work ({kind2}).")
+            if err2 and kind2 == "other":
+                print(err2)
+            if not confirm("Try again?", default=True):
+                raise SystemExit("Aborted.")
+            continue
+        print(f"\nSSH failed:\n{err}")
+        if not confirm("Try again?", default=True):
+            raise SystemExit("Aborted.")
+
+
+def choose_layout(current):
+    names = sorted(LAYOUTS)
+    print("\nAvailable layouts (AltGr + letter; add Shift for uppercase):\n")
+    for i, name in enumerate(names, 1):
+        label, table = LAYOUTS[name]
+        chars = " ".join(c[0] for c in table.values())
+        mark = " (currently installed)" if name == current else ""
+        print(f"  {i}. {name:8s} {label}{mark}")
+        print(f"     {chars}")
+    default = str(names.index(current) + 1) if current else str(names.index("pl") + 1)
+    while True:
+        answer = ask("\nWhich layout?", default)
+        if answer.isdigit() and 1 <= int(answer) <= len(names):
+            return names[int(answer) - 1]
+        if answer in names:
+            return answer
+        print("Please enter a number from the list, or a layout name.")
+
+
+def cmd_interactive(args):
+    print("\n\033[1mreMarkable Type Folio — AltGr layout installer\033[0m")
+    print("This adds national characters on AltGr (right Alt) to the Type Folio.")
+    print("Nothing is changed until you confirm, and it can always be undone.")
+
+    step(1, "Connect to the tablet")
+    print("Connect the tablet by USB. It appears as 10.11.99.1.")
+    host = ask("Tablet address", args.host)
+    if "@" not in host:
+        host = f"root@{host}"
+    host = wizard_connect(host)
+
+    step(2, "Check the tablet")
+    with tempfile.TemporaryDirectory() as tmp:
+        data = fetch_plugin(host, tmp)
+    ver = ssh(host,
+              "sed -n 's/^REMARKABLE_RELEASE_VERSION=//p' /usr/share/remarkable/update.conf",
+              capture=True).stdout.strip()
+    info = analyze(data)
+    detected = detect_layout(info)
+    print(f"reMarkable OS {ver or 'unknown'}, keyboard layout table found "
+          f"({info['entries']} keys).")
+    current = None
+    if detected is None:
+        print("No layout patch installed yet.")
+    else:
+        name, got, total = detected
+        current = name
+        state = "installed" if got == total else f"partially installed ({got}/{total})"
+        print(f"Layout patch {state}: {name} — {LAYOUTS[name][0]}")
+
+    step(3, "Choose what to do")
+    if current:
+        print(f"1. Switch to a different layout (replaces {current})")
+        print(f"2. Remove the patch and restore the original keyboard")
+        print(f"3. Reinstall {current} (e.g. after a reMarkable OS update)")
+        action = ask("Your choice", "1")
+        if action == "2":
+            if not confirm("Restore the original keyboard layout?", default=True):
+                raise SystemExit("Aborted.")
+            step(4, "Restoring")
+            do_restore(host, args.no_restart)
+            print("\nDone — the keyboard is back to stock.")
+            return
+        if action == "3":
+            layout = current
+        else:
+            layout = choose_layout(current)
+            if layout != current:
+                print(f"\nSwitching layouts restores the original plugin first, "
+                      f"then applies {layout}.")
+    else:
+        layout = choose_layout(None)
+
+    label, table = LAYOUTS[layout]
+    step(4, f"Install {label}")
+    examples = list(table.items())[:3]
+    for key, chars in examples:
+        upper = f", AltGr+Shift+{key.upper()} = {chars[1]}" if len(chars) > 1 else ""
+        print(f"  AltGr+{key.upper()} = {chars[0]}{upper}")
+    if not confirm(f"Install {label} on {host}?", default=True):
+        raise SystemExit("Aborted.")
+
+    if current and current != layout:
+        print("\nRestoring the original plugin first …")
+        do_restore(host, no_restart=True, quiet=True)
+        with tempfile.TemporaryDirectory() as tmp:
+            data = fetch_plugin(host, tmp)
+    patched, msg = apply_patch(data, layout)
+    if msg == "already patched":
+        print("Already installed — nothing to do.")
+        return
+    print(msg)
+    deploy(host, patched, data, args.no_restart)
+
+    print("\n\033[1mDone.\033[0m Attach the Type Folio and try it in a typed note:")
+    for key, chars in examples:
+        print(f"  AltGr+{key.upper()} -> {chars[0]}")
+    print("\nKeep the Type Folio layout set to US/English in Settings > "
+          "Language and keyboard.")
+    print("A reMarkable OS update will undo this — just run the installer again.")
+    print(f"To undo now:  {sys.argv[0]} restore --host {host}")
 
 
 def main():
     p = argparse.ArgumentParser(description=__doc__.splitlines()[0])
-    p.add_argument("command", choices=["layouts", "setup", "check", "patch", "restore"])
+    p.add_argument("command",
+                   choices=["interactive", "layouts", "setup", "check", "patch", "restore"])
     p.add_argument("--layout", default="pl", choices=sorted(LAYOUTS),
                    help="layout to apply with `patch` (default: %(default)s)")
     p.add_argument("--host", default="root@10.11.99.1",
@@ -430,12 +670,15 @@ def main():
     if args.ask_pass or args.command == "setup":
         use_password()
     try:
-        {"layouts": cmd_layouts, "setup": cmd_setup, "check": cmd_check,
-         "patch": cmd_patch, "restore": cmd_restore}[args.command](args)
+        {"interactive": cmd_interactive, "layouts": cmd_layouts, "setup": cmd_setup,
+         "check": cmd_check, "patch": cmd_patch,
+         "restore": cmd_restore}[args.command](args)
+    except KeyboardInterrupt:
+        raise SystemExit("\nAborted.")
     except subprocess.CalledProcessError as e:
-        hint = ("" if args.ask_pass or args.command == "setup" else
+        hint = ("" if args.ask_pass or args.command in ("setup", "interactive") else
                 "\nhint: if SSH keys aren't set up on the tablet, retry with "
-                "--ask-pass, or run `setup` once")
+                "--ask-pass, run `setup` once, or use `interactive`")
         raise SystemExit(f"error: command failed: {' '.join(e.cmd)}{hint}")
 
 
